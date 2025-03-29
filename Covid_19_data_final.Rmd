@@ -1,0 +1,226 @@
+---
+author: "FP"
+date: "2025-03-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Covid-19 John Hopkins Data Analysis
+
+In this document I will explore the Covid-19 from John Hopkins in order to better understand the impact of Covid-19 across the world.
+
+The data from JH includes data from countries around the world and also specific to the US. In this analysis, I will focus on world data including cases, deaths, population, countries, and states.
+
+First we will view the top 10 countries with the most total deaths. After, we will factor in population to calculate deaths per million to get a more accurate measure of the impact.
+
+We will begin by importing time series data from Github. There will be 4 files.
+
+```{r}
+library(tidyverse)
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_US.csv","time_series_covid19_confirmed_global.csv","time_series_covid19_deaths_US.csv","time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in,file_names)
+```
+
+We will read in the data
+
+```{r}
+global_cases <- read_csv(urls[2], show_col_types = FALSE) 
+global_deaths <- read_csv(urls[4], show_col_types = FALSE) 
+US_cases <- read_csv(urls[1], show_col_types = FALSE) 
+US_deaths <- read_csv(urls[3], show_col_types = FALSE) 
+
+```
+
+We will start tidying the global cases data by pivoting dates to rows and keeping only relevant columns Province, Country, Date, Cases
+
+```{r}
+
+global_cases <- global_cases %>% pivot_longer(cols = -c(`Province/State`,`Country/Region`,Lat,Long), names_to = "date",values_to = "cases") %>% select(-c(Lat,Long))
+
+
+```
+
+We will tidy up the data for global deaths
+
+```{r}
+
+global_deaths <- global_deaths %>% pivot_longer(cols = -c(`Province/State`,`Country/Region`,Lat,Long), names_to = "date", values_to = "deaths") %>% select(-c(Lat,Long))
+
+```
+
+We can now join the global cases and global deaths tables
+
+```{r}
+library(lubridate)
+global_data <- global_cases %>% full_join(global_deaths) %>% rename(Country_Region = `Country/Region`, Province_State = `Province/State`) %>% mutate(date = mdy(date))
+```
+
+Next we can remove rows where cases are 0
+
+```{r}
+global_data <- global_data %>% filter(cases > 0)
+
+```
+
+For the final data preparation step, we will add in population.
+
+We will import the population CSV file
+
+```{r}
+global_population <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv", show_col_types = FALSE) %>% select(-c(Lat,Long_, Combined_Key,code3,iso2,iso3,Admin2))
+
+
+```
+
+Before being able to join, we will create a combined key for global_data which we can use for the join
+
+```{r}
+global_data <- global_data %>% unite("Combined_Key", c(Province_State,Country_Region), sep = ", ",na.rm = TRUE, remove = FALSE)
+```
+
+Now we join population_data to global_data
+
+```{r}
+global_data <- global_data %>% left_join(global_population, by = c("Province_State","Country_Region")) %>% select(-c(UID,FIPS)) %>% select(Province_State,Country_Region,date,cases,deaths,Combined_Key,Population)
+```
+
+Grouping data by country and retrieving the total number of deaths per country
+
+```{r}
+global_data_by_country <- global_data %>% group_by(Country_Region) %>% summarize(cases = max(cases), deaths = max(deaths), population = max(Population))
+```
+
+Filtering to top 10 countries with most deaths
+
+```{r}
+global_top_10_deaths <- global_data_by_country %>% group_by(Country_Region) %>% summarize(cases = max(cases), deaths= max(deaths), .groups = "drop") %>% arrange(desc(deaths)) %>% slice_head(n=10)
+```
+
+## Top 10 Countries with Most Covid-19 Deaths
+
+Creating bar chart
+
+```{r}
+library(scales)
+ggplot(global_top_10_deaths, aes(x = reorder(Country_Region, deaths), y = deaths, fill = Country_Region)) +
+  geom_bar(stat = "identity", width = 0.7, show.legend = FALSE) +  
+  labs(title = "Top 10 Countries with Most COVID-19 Deaths",
+       x = "Country",
+       y = "Total Deaths") +
+  scale_y_continuous(labels = label_number(scale = 1)) +  # Format Y-axis only
+
+  coord_flip() +                            
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 10, face = "bold"),
+        axis.title = element_text(size = 12, face = "bold"))
+```
+
+## Visualize deaths per million per Country
+
+Group data by country and year, and create a deaths per million variable.
+
+```{r}
+global_death_perm_year <- global_data %>% mutate(year = year(date)) %>% group_by(Country_Region, year(date)) %>% summarize(deaths = max(deaths), cases = max(cases),Population = max(Population)) %>% mutate(deaths_perm  = deaths*1000000/Population, cases_perm = cases*1000000/Population)
+```
+
+After doing a quick review of the data, it appears that the population data does not change yearly. I wanted to analyze if there was a change in deaths per million YOY but I will use the max year, population and deaths instead.
+
+```{r}
+(global_death_perm_year)
+```
+
+We will tidy the global data to view deaths per million per country
+
+```{r}
+global_death_perm <- global_data %>% group_by(Country_Region) %>% summarize(deaths = max(deaths), cases = max(cases), Population = max(Population)) %>% mutate(deaths_perm  = deaths*1000000/Population, cases_perm = cases*1000000/Population)
+global_death_perm
+```
+
+Lets view the top countries by deaths per million.
+
+We will start by creating a data set to group the top 10 countries, sorted by descending order.
+
+```{r}
+global_top_10_deathsperm <- global_death_perm %>% group_by(Country_Region) %>% summarize(deaths= deaths_perm, .groups = "drop") %>% arrange(desc(deaths)) %>% slice_head(n=10)
+```
+
+We will create the bar graph
+
+```{r}
+library(scales)
+ggplot(global_top_10_deathsperm, aes(x = reorder(Country_Region, deaths), y = deaths, fill = Country_Region)) +
+  geom_bar(stat = "identity", width = 0.7, show.legend = FALSE) +  
+  labs(title = "Top 10 Countries with Most COVID-19 Deaths per Million",
+       x = "Country",
+       y = "Total Deaths") +
+  #scale_y_continuous(labels = label_number(scale = 1)) +  # Format Y-axis only
+
+  coord_flip() +  
+    theme_minimal() +
+  theme(axis.text.y = element_text(size = 10, face = "bold"),
+        axis.title = element_text(size = 12, face = "bold"))
+```
+
+### Observation
+
+While the US had the most overall deaths, we can see that in terms of deaths per million, the US is not in the top 10. Peru was the most affected country, appearing at the top of deaths per million and also being present in top 10 countries with total deaths.
+
+For comparison, we can check where the US ranks:
+
+```{r}
+global_death_perm %>% group_by(Country_Region) %>% summarize(deaths= deaths_perm, .groups = "drop") %>% arrange(desc(deaths)) %>% mutate(Rank = row_number()) %>% filter(Country_Region == "US")
+```
+
+## Modeling our Data
+
+We will do a linear model to check predictions based on cases per million and deaths per million
+
+```{r}
+mod <- lm(deaths_perm ~ cases_perm,data = global_death_perm)
+summary(mod)
+```
+
+I can see there are deletions due to data missing, we will drop rows where cases, deaths, or population is 0
+
+```{r}
+global_death_perm <- global_death_perm %>% filter(Population > 0, cases >0, deaths >0)
+```
+
+We will run the model again
+
+```{r}
+mod <- lm(deaths_perm ~ cases_perm,data = global_death_perm)
+summary(mod)
+```
+
+We can now generate a prediction variable which will allow us to visualize the model
+
+```{r}
+global_death_perm %>% mutate(pred = predict(mod))
+global_deaths_pred <- global_death_perm %>% mutate(pred = predict(mod))
+
+```
+
+```{r}
+global_deaths_pred %>% ggplot() + geom_point(aes(x = cases_perm, y = deaths_perm), color = "blue") + geom_point(aes(x = cases_perm, y = pred), color = "red")+
+labs(title = "Linear Model Cases and Deaths",
+       x = "Cases",
+       y = "Total Deaths") +
+  #scale_y_continuous(labels = label_number(scale = 1)) +  # Format Y-axis only
+
+    theme_minimal() +
+  theme(axis.text.y = element_text(size = 10, face = "bold"),
+        axis.title = element_text(size = 12, face = "bold"))
+```
+
+### Bias
+
+From an initial look, it was easy to make an assumption on which countries were impacted the most. Some of the biggest countries with large populations like the US and Brazil show the most deaths. However, after adding variables to the data like cases and deaths per million, we can see that some of the countries most heavily impacted by Covid-19 were smaller countries like Peru and Bulgaria. This data doesnt tell the whole story so I searched online for information specific to Peru.
+
+From what I found, the main reason for such a heavy impact was "... the collapse of an underfunded public health care system with low coverage among the population and a lack of adequate health care facilities, including enough hospitals to treat patients requiring intensive care (see more in [Olivera, 2021](https://pmc.ncbi.nlm.nih.gov/articles/PMC10271852/#bibr6-14680181231180533)). Levels of public investments in health have been lower in Peru than in other countries with similar economic development ([Economic Commission for Latin America and the Caribbean (ECLAC), 2019](https://pmc.ncbi.nlm.nih.gov/articles/PMC10271852/#bibr2-14680181231180533))."
+
+Source: <https://pmc.ncbi.nlm.nih.gov/articles/PMC10271852/>
